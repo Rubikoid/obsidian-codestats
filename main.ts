@@ -1,137 +1,148 @@
 import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
+import { Pulse } from "./src/pulse";
+import { CodeStatsAPI } from "./src/code-stats-api";
 
-// Remember to rename these classes and interfaces!
-
-interface MyPluginSettings {
-	mySetting: string;
+interface CodeStatsSettings {
+    API_KEY: string | null;
+    USER_NAME: string | null;
+    UPDATE_URL: string;
 }
 
-const DEFAULT_SETTINGS: MyPluginSettings = {
-	mySetting: 'default'
+const DEFAULT_SETTINGS: CodeStatsSettings = {
+    API_KEY: null,
+    USER_NAME: null,
+    UPDATE_URL: "https://codestats.net/api/",
 }
 
-export default class MyPlugin extends Plugin {
-	settings: MyPluginSettings;
+export default class CodeStatsPlugin extends Plugin {
+    settings: CodeStatsSettings;
 
-	async onload() {
-		await this.loadSettings();
+    private pulse: Pulse;
+    private api: CodeStatsAPI;
+    private updateTimeout: any;
 
-		// This creates an icon in the left ribbon.
-		const ribbonIconEl = this.addRibbonIcon('dice', 'Sample Plugin', (evt: MouseEvent) => {
-			// Called when the user clicks the icon.
-			new Notice('This is a notice!');
-		});
-		// Perform additional things with the ribbon
-		ribbonIconEl.addClass('my-plugin-ribbon-class');
+    private statusBarItemEl: HTMLElement;
 
-		// This adds a status bar item to the bottom of the app. Does not work on mobile apps.
-		const statusBarItemEl = this.addStatusBarItem();
-		statusBarItemEl.setText('Status Bar Text');
+    // wait 10s after each change in the document before sending an update
+    private UPDATE_DELAY = 10000;
 
-		// This adds a simple command that can be triggered anywhere
-		this.addCommand({
-			id: 'open-sample-modal-simple',
-			name: 'Open sample modal (simple)',
-			callback: () => {
-				new SampleModal(this.app).open();
-			}
-		});
-		// This adds an editor command that can perform some operation on the current editor instance
-		this.addCommand({
-			id: 'sample-editor-command',
-			name: 'Sample editor command',
-			editorCallback: (editor: Editor, view: MarkdownView) => {
-				console.log(editor.getSelection());
-				editor.replaceSelection('Sample Editor Command');
-			}
-		});
-		// This adds a complex command that can check whether the current state of the app allows execution of the command
-		this.addCommand({
-			id: 'open-sample-modal-complex',
-			name: 'Open sample modal (complex)',
-			checkCallback: (checking: boolean) => {
-				// Conditions to check
-				const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (markdownView) {
-					// If checking is true, we're simply "checking" if the command can be run.
-					// If checking is false, then we want to actually perform the operation.
-					if (!checking) {
-						new SampleModal(this.app).open();
-					}
+    async onload() {
+        await this.loadSettings();
+        this.pulse = new Pulse();
+        this.initAPI();
 
-					// This command will only show up in Command Palette when the check function returns true
-					return true;
-				}
-			}
-		});
+        // This adds a status bar item to the bottom of the app. Does not work on mobile apps.
+        this.statusBarItemEl = this.addStatusBarItem();
+        this.statusBarItemEl.setText('CodeStats: ...');
 
-		// This adds a settings tab so the user can configure various aspects of the plugin
-		this.addSettingTab(new SampleSettingTab(this.app, this));
+        // This adds a settings tab so the user can configure various aspects of the plugin
+        this.addSettingTab(new CodeStatsSettingTab(this.app, this));
 
-		// If the plugin hooks up any global DOM events (on parts of the app that doesn't belong to this plugin)
-		// Using this function will automatically remove the event listener when this plugin is disabled.
-		this.registerDomEvent(document, 'click', (evt: MouseEvent) => {
-			console.log('click', evt);
-		});
+        this.app.workspace.on("editor-change", (editor: Editor, MarkdownView: MarkdownView) => {
+            this.updateXpCount(1);
+        })
 
-		// When registering intervals, this function will automatically clear the interval when the plugin is disabled.
-		this.registerInterval(window.setInterval(() => console.log('setInterval'), 5 * 60 * 1000));
-	}
+        // If the plugin hooks up any global DOM events (on parts of the app that doesn't belong to this plugin)
+        // Using this function will automatically remove the event listener when this plugin is disabled.
+        // this.registerDomEvent(document, 'click', (evt: MouseEvent) => {
+        //     console.log('click', evt);
+        // });
 
-	onunload() {
+        // When registering intervals, this function will automatically clear the interval when the plugin is disabled.
+        // this.registerInterval(window.setInterval(() => console.log('setInterval'), 5 * 60 * 1000));
+    }
 
-	}
+    onunload() {
 
-	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
-	}
+    }
 
-	async saveSettings() {
-		await this.saveData(this.settings);
-	}
+    public updateXpCount(changeCount: number): void {
+        this.pulse.addXP("Obsidian", changeCount);
+
+        this.updateStatusBar(`${this.pulse.getTotalXP()}`);
+
+        // each change resets the timeout so we only send updates when there is a 10s delay in updates to the document
+        if (this.updateTimeout !== null) {
+            clearTimeout(this.updateTimeout);
+        }
+
+        this.updateTimeout = setTimeout(() => {
+            const promise = this.api.sendUpdate(this.pulse);
+
+            if (promise !== null) {
+                promise.then(() => {
+                    this.updateStatusBar(`${this.pulse.getTotalXP()}`);
+                });
+            }
+        }, this.UPDATE_DELAY);
+    }
+
+    private updateStatusBar(changeCount: string): void {
+        this.statusBarItemEl.setText(`C::S ${changeCount}`);
+    }
+
+    async loadSettings() {
+        this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    }
+
+    async saveSettings() {
+        await this.saveData(this.settings);
+    }
+
+    private initAPI() {
+        if (this.api != null)
+            this.api.updateSettings(this.settings.API_KEY, this.settings.UPDATE_URL, this.settings.USER_NAME);
+        else
+            this.api = new CodeStatsAPI(this.settings.API_KEY, this.settings.UPDATE_URL, this.settings.USER_NAME);
+    }
 }
 
-class SampleModal extends Modal {
-	constructor(app: App) {
-		super(app);
-	}
+class CodeStatsSettingTab extends PluginSettingTab {
+    plugin: CodeStatsPlugin;
 
-	onOpen() {
-		const {contentEl} = this;
-		contentEl.setText('Woah!');
-	}
+    constructor(app: App, plugin: CodeStatsPlugin) {
+        super(app, plugin);
+        this.plugin = plugin;
+    }
 
-	onClose() {
-		const {contentEl} = this;
-		contentEl.empty();
-	}
-}
+    display(): void {
+        const { containerEl } = this;
 
-class SampleSettingTab extends PluginSettingTab {
-	plugin: MyPlugin;
+        containerEl.empty();
 
-	constructor(app: App, plugin: MyPlugin) {
-		super(app, plugin);
-		this.plugin = plugin;
-	}
+        containerEl.createEl('h2', { text: 'Settings for codestats' });
 
-	display(): void {
-		const {containerEl} = this;
+        new Setting(containerEl)
+            .setName('API key')
+            .setDesc('CodeStats API key')
+            .addText(text => text
+                .setPlaceholder('Enter your api key')
+                .setValue(this.plugin.settings.API_KEY || "")
+                .onChange(async (value) => {
+                    this.plugin.settings.API_KEY = value;
+                    await this.plugin.saveSettings();
+                }));
 
-		containerEl.empty();
+        new Setting(containerEl)
+            .setName('Username')
+            .setDesc('CodeStats username')
+            .addText(text => text
+                .setPlaceholder('Enter your username')
+                .setValue(this.plugin.settings.USER_NAME || "")
+                .onChange(async (value) => {
+                    this.plugin.settings.USER_NAME = value;
+                    await this.plugin.saveSettings();
+                }));
 
-		containerEl.createEl('h2', {text: 'Settings for my awesome plugin.'});
-
-		new Setting(containerEl)
-			.setName('Setting #1')
-			.setDesc('It\'s a secret')
-			.addText(text => text
-				.setPlaceholder('Enter your secret')
-				.setValue(this.plugin.settings.mySetting)
-				.onChange(async (value) => {
-					console.log('Secret: ' + value);
-					this.plugin.settings.mySetting = value;
-					await this.plugin.saveSettings();
-				}));
-	}
+        new Setting(containerEl)
+            .setName('Update url')
+            .setDesc('CodeStats update url (if you use custom server)')
+            .addText(text => text
+                .setPlaceholder('Enter codestats update url')
+                .setValue(this.plugin.settings.UPDATE_URL)
+                .onChange(async (value) => {
+                    this.plugin.settings.UPDATE_URL = value;
+                    await this.plugin.saveSettings();
+                }));
+    }
 }
