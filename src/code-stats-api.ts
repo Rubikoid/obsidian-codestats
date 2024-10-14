@@ -4,21 +4,35 @@
 
 import { Pulse } from "./pulse";
 import { getISOTimestamp, getLanguageName } from "./utils";
-import * as axios from "axios";
+import { request } from "obsidian";
+// import * as axios from "axios";
 
 export class CodeStatsAPI {
     private API_KEY: string | null = null;
     private USER_NAME: string | null = null;
     private UPDATE_URL = "https://codestats.net/api/";
 
-    private axios: axios.AxiosInstance | null = null;
-
     constructor(apiKey: string | null, apiURL: string, userName: string | null) {
         this.updateSettings(apiKey, apiURL, userName);
     }
 
-    public updateSettings(apiKey: string | null, apiURL: string, userName: string | null) {
+    private sendRequest(path: string, json: string | null = null): Promise<string> {
+        if (this.API_KEY === null) {
+            throw new Error("no api key here...");
+        }
 
+        return request({
+            url: `${this.UPDATE_URL}/${path}`,
+            method: json === null ? "GET" : "POST",
+            contentType: "application/json",
+            headers: {
+                "X-API-Token": this.API_KEY,
+            },
+            body: json === null ? undefined : json,
+        });
+    }
+
+    public updateSettings(apiKey: string | null, apiURL: string, userName: string | null) {
         this.API_KEY = apiKey;
         this.UPDATE_URL = apiURL;
         this.USER_NAME = userName;
@@ -31,19 +45,16 @@ export class CodeStatsAPI {
             return;
         }
 
-        this.axios = axios.default.create({
-            baseURL: this.UPDATE_URL,
-            timeout: 10000,
-            headers: {
-                "X-API-Token": this.API_KEY,
-                "Content-Type": "application/json"
-            }
-        });
+        // this.axios = axios.default.create({
+        //     baseURL: ,
+        //     timeout: 10000,
+        //     headers: 
+        // });
     }
 
-    public sendUpdate(pulse: Pulse): axios.AxiosPromise {
+    public sendUpdate(pulse: Pulse): Promise<void> | null {
         // If we did not have API key, don't try to update
-        if (this.axios === null) {
+        if (this.API_KEY === null) {
             return null;
         }
 
@@ -59,8 +70,7 @@ export class CodeStatsAPI {
         let json: string = JSON.stringify(data);
         console.log(`JSON: ${json}`);
 
-        return this.axios
-            .post("my/pulses", json)
+        return this.sendRequest("my/pulses", json)
             .then(response => {
                 console.log(response);
             })
@@ -72,11 +82,15 @@ export class CodeStatsAPI {
             });
     }
 
-    public getProfile(): axios.AxiosPromise {
-        return this.axios
-            .get(`users/${this.USER_NAME}`)
+    public getProfile(): Promise<string | null> | null {
+        // If we did not have API key, don't try to update  
+        if (this.API_KEY === null) {
+            return null;
+        }
+
+        return this.sendRequest(`users/${this.USER_NAME}`)
             .then(response => {
-                return response.data;
+                return response;
             })
             .catch(error => {
                 console.log(error);
